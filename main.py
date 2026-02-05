@@ -1,67 +1,54 @@
-import os
-import time
-import logging
-import requests
-import telebot
-
-# --- 1. CONFIGURATION & LOGGING ---
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-# Load Environment Variables
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-XAPIVERSE_KEY = os.getenv("XAPIVERSE_KEY")
-
-if not BOT_TOKEN or not XAPIVERSE_KEY:
-    logger.error("CRITICAL: BOT_TOKEN or XAPIVERSE_KEY is missing!")
-    exit(1)
-
-bot = telebot.TeleBot(BOT_TOKEN)
-
-# --- 2. HELPER FUNCTIONS ---
-
 def extract_download_data(data):
     """
-    Safely extracts key info from the xAPIverse JSON.
-    Prevents MESSAGE_TOO_LONG by picking only essential fields.
+    Correctly parses the xAPIverse Terabox API response structure.
+    Extracts name, size, and download link while handling nested dictionaries safely.
     """
     try:
-        # Check if the API returned a success status or the expected nested data
-        # Note: Adjust keys based on xAPIverse's specific JSON structure (usually 'data' or 'result')
-        file_info = data.get("data", data)
+        # xAPIverse usually wraps the response in a 'data' object or returns it directly
+        # The common structure for this specific API is nested within 'data'
+        info = data.get("data", {}) if isinstance(data.get("data"), dict) else data
         
-        file_name = file_info.get("file_name", "Unknown File")
-        size = file_info.get("size", "Unknown Size")
-        dl_link = file_info.get("direct_link") or file_info.get("download_link") or "Link not found"
+        # Extract File Name
+        file_name = info.get("file_name") or info.get("filename") or "Unknown File"
         
+        # Extract Size
+        size = info.get("size") or info.get("filesize") or "Unknown Size"
+        
+        # Extract Direct Link - checking common nested keys used by xAPIverse
+        # Prioritizes direct_link, then falls back to download_link or url
+        dl_link = info.get("direct_link") or info.get("download_link") or info.get("url")
+        
+        # If the link is still not found, check if there's a nested 'download' or 'file' object
+        if not dl_link:
+            nested_dl = info.get("download", {})
+            if isinstance(nested_dl, dict):
+                dl_link = nested_dl.get("url") or nested_dl.get("link")
+
+        if not dl_link:
+            return "❌ Download link could not be generated for this file."
+
+        # Construct short, safe message to avoid MESSAGE_TOO_LONG
         message = (
             f"📦 **File:** {file_name}\n"
             f"⚖️ **Size:** {size}\n\n"
             f"🚀 **Direct Download Link:**\n`{dl_link}`"
         )
         return message
-    except Exception:
-        # Fallback if JSON structure is unexpected
-        return "⚠️ Error parsing file data, but here is the link: " + str(data.get("url", "Link not found"))
 
-# --- 3. BOT HANDLERS ---
-
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    bot.reply_to(message, "🚀 **Terabox Downloader**\n\nSend me a Terabox link to get the direct download data.")
+    except Exception as e:
+        logger.error(f"Parsing error: {e}")
+        return "⚠️ Error: The API response format has changed. Please contact the administrator."
 
 @bot.message_handler(func=lambda message: True)
 def handle_terabox_link(message):
     url = message.text.strip()
     
-    if "terabox" not in url and "1024tera" not in url:
+    # Validation for Terabox domains
+    if not any(domain in url for domain in ["terabox", "1024tera", "nephobox", "4shared"]):
         bot.reply_to(message, "❌ Please send a valid Terabox link.")
         return
 
-    status_msg = bot.reply_to(message, "⏳ Fetching secure link from xAPIverse...")
+    status_msg = bot.reply_to(message, "⏳ Generating direct link...")
 
     try:
         api_url = "https://xapiverse.com/api/terabox"
@@ -71,12 +58,21 @@ def handle_terabox_link(message):
         }
         payload = {"url": url}
 
-        response = requests.post(api_url, headers=headers, json=payload, timeout=40)
+        response = requests.post(api_url, headers=headers, json=payload, timeout=45)
         
         if response.status_code == 200:
-            full_data = response.json()
-            # Extract only the necessary info to avoid MESSAGE_TOO_LONG error
-            clean_message = extract_download_data(full_data)
+            json_data = response.json()
+            
+            # Check if API returned an internal error message
+            if json_data.get("status") == "error":
+                bot.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=status_msg.message_id,
+                    text=f"❌ **API Error:** {json_data.get('message', 'Unknown Error')}"
+                )
+                return
+
+            clean_message = extract_download_data(json_data)
             
             bot.edit_message_text(
                 chat_id=message.chat.id,
@@ -88,36 +84,13 @@ def handle_terabox_link(message):
             bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=status_msg.message_id,
-                text=f"❌ **API Error ({response.status_code})**"
+                text=f"❌ **Server Error:** API returned status {response.status_code}"
             )
 
     except Exception as e:
-        logger.error(f"Request Error: {e}")
+        logger.error(f"Handler Error: {e}")
         bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=status_msg.message_id,
-            text="⚠️ An error occurred while processing the link."
+            text="⚠️ An unexpected error occurred. Please try again later."
         )
-
-# --- 4. PRODUCTION POLLING LOOP ---
-
-def run_bot():
-    logger.info("Starting bot...")
-    
-    # Clean conflict: Remove webhook and wait
-    try:
-        bot.remove_webhook()
-        time.sleep(1)
-    except Exception as e:
-        logger.warning(f"Webhook removal failed: {e}")
-
-    while True:
-        try:
-            logger.info("Bot is now polling.")
-            bot.polling(none_stop=True, interval=1, timeout=20)
-        except Exception as e:
-            logger.error(f"Polling error: {e}")
-            time.sleep(5) # Cooldown before restart
-
-if __name__ == "__main__":
-    run_bot()
