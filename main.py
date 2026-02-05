@@ -70,7 +70,13 @@ def handle_link(message):
             file_data = json_data.get("list", [{}])[0]
 
             download_url = file_data.get("download_link")
-            watch_url = file_data.get("stream_url")
+            fast_stream = file_data.get("fast_stream_url", {})
+stream_url = fast_stream.get("720p") or fast_stream.get("480p")
+
+if stream_url:
+    watch_url = f"https://teraplayer979.github.io/stream-player/?video={stream_url}"
+else:
+    watch_url = None
 
             # Fallback: if no stream_url, use download link for watch
             if not watch_url:
