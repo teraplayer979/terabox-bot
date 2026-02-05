@@ -10,6 +10,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAPIVERSE_KEY = os.getenv("XAPIVERSE_KEY")
 CHANNEL_USERNAME = "@terabox_directlinks"  # apna channel username
 
+PLAYER_SITE = "https://teraplayer979.github.io/stream-player/"
+
 # --- LOGGING ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -71,43 +73,15 @@ def handle_link(message):
 
             download_url = file_data.get("download_link")
 
-# Get m3u8 stream
-fast_stream = file_data.get("fast_stream_url", {})
-stream_url = fast_stream.get("720p") or fast_stream.get("480p")
+            # Extract m3u8 stream
+            fast_stream = file_data.get("fast_stream_url", {})
+            stream_url = fast_stream.get("720p") or fast_stream.get("480p")
 
-# Convert to player link
-if stream_url:
-    watch_url = f"https://teraplayer979.github.io/stream-player/?video={stream_url}"
-else:
-    watch_url = None
-
-if download_url:
-    markup = InlineKeyboardMarkup()
-
-    if watch_url:
-        markup.add(
-            InlineKeyboardButton(
-                "▶️ Watch Online",
-                url=watch_url
-            )
-        )
-
-    markup.add(
-        InlineKeyboardButton(
-            "⬇️ Download",
-            url=download_url
-        )
-    )
-
-    bot.edit_message_text(
-        chat_id=message.chat.id,
-        message_id=wait_msg.message_id,
-        text="✅ Your links are ready:",
-        reply_markup=markup
-    )
-            # Fallback: if no stream_url, use download link for watch
-            if not watch_url:
-                watch_url = download_url
+            # Convert to player site link
+            if stream_url:
+                watch_url = f"{PLAYER_SITE}?video={stream_url}"
+            else:
+                watch_url = None
 
             if download_url:
                 markup = InlineKeyboardMarkup()
