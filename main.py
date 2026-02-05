@@ -3,12 +3,12 @@ import time
 import logging
 import requests
 import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # --- CONFIG ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAPIVERSE_KEY = os.getenv("XAPIVERSE_KEY")
-
-CHANNEL_USERNAME = "@terabox_directlinks"  # apna channel username daalo
+CHANNEL_USERNAME = "@terabox_directlinks"  # apna channel username
 
 # --- LOGGING ---
 logging.basicConfig(level=logging.INFO)
@@ -37,11 +37,8 @@ def start(message):
     bot.reply_to(message, "Send any Terabox link.")
 
 # --- MAIN LINK HANDLER ---
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-
 @bot.message_handler(func=lambda message: True)
 def handle_link(message):
-    # Force subscribe check
     if not is_user_joined(message.from_user.id):
         bot.reply_to(
             message,
@@ -67,45 +64,37 @@ def handle_link(message):
 
         if response.status_code == 200:
             json_data = response.json()
+            file_data = json_data.get("list", [{}])[0]
 
-            try:
-                file_data = json_data.get("list", [{}])[0]
-                download_url = file_data.get("download_link")
+            download_url = file_data.get("download_link")
 
-stream_url = (
-    file_data.get("stream_url")
-    or file_data.get("stream_link")
-)
+            # Real streaming extraction
+            stream_url = (
+                file_data.get("stream_url")
+                or file_data.get("stream_link")
+            )
 
-# If fast_stream_url available, pick 720p
-if not stream_url:
-    fast_stream = file_data.get("fast_stream_url", {})
-    stream_url = fast_stream.get("720p") or fast_stream.get("480p")
-            except (IndexError, AttributeError):
-                download_url = None
+            if not stream_url:
+                fast_stream = file_data.get("fast_stream_url", {})
+                stream_url = fast_stream.get("720p") or fast_stream.get("480p")
 
             if download_url:
                 markup = InlineKeyboardMarkup()
 
-                # Watch online (same link used for streaming)
-                markup = InlineKeyboardMarkup()
+                if stream_url:
+                    markup.add(
+                        InlineKeyboardButton(
+                            "▶️ Watch Online",
+                            url=stream_url
+                        )
+                    )
 
-# Watch button (real stream)
-if stream_url:
-    markup.add(
-        InlineKeyboardButton(
-            "▶️ Watch Online",
-            url=stream_url
-        )
-    )
-
-# Download button
-markup.add(
-    InlineKeyboardButton(
-        "⬇️ Download",
-        url=download_url
-    )
-)
+                markup.add(
+                    InlineKeyboardButton(
+                        "⬇️ Download",
+                        url=download_url
+                    )
+                )
 
                 bot.edit_message_text(
                     chat_id=message.chat.id,
