@@ -67,28 +67,41 @@ def handle_link(message):
             file_data = json_data.get("list", [{}])[0]
 
             download_url = file_data.get("download_link")
+watch_url = file_data.get("stream_url")
 
-            # Real streaming extraction
-            stream_url = (
-                file_data.get("stream_url")
-                or file_data.get("stream_link")
+if download_url or watch_url:
+    markup = InlineKeyboardMarkup()
+
+    # Watch button
+    if watch_url:
+        markup.add(
+            InlineKeyboardButton(
+                "▶️ Watch Online",
+                url=watch_url
             )
+        )
 
-            if not stream_url:
-                fast_stream = file_data.get("fast_stream_url", {})
-                stream_url = fast_stream.get("720p") or fast_stream.get("480p")
+    # Download button
+    if download_url:
+        markup.add(
+            InlineKeyboardButton(
+                "⬇️ Download",
+                url=download_url
+            )
+        )
 
-            if download_url:
-                markup = InlineKeyboardMarkup()
-
-                if stream_url:
-                    markup.add(
-                        InlineKeyboardButton(
-                            "▶️ Watch Online",
-                            url=stream_url
-                        )
-                    )
-
+    bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=wait_msg.message_id,
+        text="✅ Your links are ready:",
+        reply_markup=markup
+    )
+else:
+    bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=wait_msg.message_id,
+        text="❌ Download link not found."
+    )
                 markup.add(
                     InlineKeyboardButton(
                         "⬇️ Download",
