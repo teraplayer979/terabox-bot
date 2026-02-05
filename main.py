@@ -3,14 +3,15 @@ import time
 import logging
 import requests
 import telebot
+import urllib.parse
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # --- CONFIG ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAPIVERSE_KEY = os.getenv("XAPIVERSE_KEY")
-CHANNEL_USERNAME = "@terabox_directlinks"  # apna channel username
 
-PLAYER_SITE = "https://teraplayer979.github.io/stream-player/"
+CHANNEL_USERNAME = "@terabox_directlinks"
+PLAYER_BASE = "https://teraplayer979.github.io/stream-player/?url="
 
 # --- LOGGING ---
 logging.basicConfig(level=logging.INFO)
@@ -51,7 +52,6 @@ def handle_link(message):
         return
 
     url_text = message.text.strip()
-
     if "terabox" not in url_text and "1024tera" not in url_text:
         return
 
@@ -73,25 +73,29 @@ def handle_link(message):
 
             download_url = file_data.get("download_link")
 
-            # Extract m3u8 stream
-            fast_stream = file_data.get("fast_stream_url", {})
-            stream_url = fast_stream.get("720p") or fast_stream.get("480p")
+            # Stream extraction
+            stream_url = (
+                file_data.get("stream_url")
+                or file_data.get("stream_link")
+            )
 
-            # Convert to player site link
-            if stream_url:
-                watch_url = f"{PLAYER_SITE}?video={stream_url}"
-            else:
-                watch_url = None
+            # fallback to fast stream
+            if not stream_url:
+                fast_stream = file_data.get("fast_stream_url", {})
+                stream_url = fast_stream.get("720p") or fast_stream.get("480p")
 
             if download_url:
                 markup = InlineKeyboardMarkup()
 
-                # Watch button
-                if watch_url:
+                # Watch button using your player site
+                if stream_url:
+                    encoded_stream = urllib.parse.quote(stream_url, safe="")
+                    player_url = PLAYER_BASE + encoded_stream
+
                     markup.add(
                         InlineKeyboardButton(
                             "▶️ Watch Online",
-                            url=watch_url
+                            url=player_url
                         )
                     )
 
@@ -115,7 +119,6 @@ def handle_link(message):
                     message_id=wait_msg.message_id,
                     text="❌ Download link not found."
                 )
-
         else:
             bot.edit_message_text(
                 chat_id=message.chat.id,
