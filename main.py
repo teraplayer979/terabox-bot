@@ -1,4 +1,4 @@
-import os
+importimport os
 import time
 import logging
 import requests
@@ -10,11 +10,14 @@ from urllib.parse import quote_plus
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAPIVERSE_KEY = os.getenv("XAPIVERSE_KEY")
 
+PLAYER_BASE = "https://teraplayer979.github.io/stream-player/"
+
 # Force subscribe settings
-CHANNEL_USERNAME = "@terabox_directlinks"   # apna channel username
+CHANNEL_USERNAME = "@terabox_directlinks"  # apna channel username
 CHANNEL_LINK = "https://t.me/terabox_directlinks"
 
-PLAYER_BASE = "https://teraplayer979.github.io/stream-player/"
+# User database file
+USER_DB = "users.txt"
 
 # --------------- LOGGING ----------------
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +29,28 @@ if not BOT_TOKEN or not XAPIVERSE_KEY:
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --------------- FORCE SUBSCRIBE CHECK ---------------
+# ---------------- USER COUNTER ----------------
+def add_user(user_id):
+    user_id = str(user_id)
+    if not os.path.exists(USER_DB):
+        with open(USER_DB, "w") as f:
+            f.write(user_id + "\n")
+        return
+
+    with open(USER_DB, "r") as f:
+        users = f.read().splitlines()
+
+    if user_id not in users:
+        with open(USER_DB, "a") as f:
+            f.write(user_id + "\n")
+
+def get_user_count():
+    if not os.path.exists(USER_DB):
+        return 0
+    with open(USER_DB, "r") as f:
+        return len(f.read().splitlines())
+
+# ---------------- FORCE SUBSCRIBE ----------------
 def is_user_joined(user_id):
     try:
         member = bot.get_chat_member(CHANNEL_USERNAME, user_id)
@@ -42,6 +66,8 @@ def join_markup():
 # --------------- START ------------------
 @bot.message_handler(commands=["start", "help"])
 def start(message):
+    add_user(message.from_user.id)
+
     if not is_user_joined(message.from_user.id):
         bot.reply_to(
             message,
@@ -50,12 +76,17 @@ def start(message):
         )
         return
 
-    bot.reply_to(message, "Send a Terabox link to stream or download.")
+    total_users = get_user_count()
+    bot.reply_to(
+        message,
+        f"Send a Terabox link.\n\n👥 Total users: {total_users}"
+    )
 
 # --------------- MAIN HANDLER -----------
 @bot.message_handler(func=lambda message: True)
 def handle_link(message):
     user_id = message.from_user.id
+    add_user(user_id)
 
     # Force subscribe check
     if not is_user_joined(user_id):
@@ -92,6 +123,7 @@ def handle_link(message):
             return
 
         json_data = response.json()
+        logger.info(json_data)
 
         file_list = json_data.get("list", [])
         if not file_list:
@@ -103,48 +135,48 @@ def handle_link(message):
             return
 
         file_info = file_list[0]
-        file_name = file_info.get("name", "File Ready")
-        download_url = file_info.get("download_link")
 
         fast_streams = file_info.get("fast_stream_url", {})
 
-        # Create buttons
+        watch_url = (
+            fast_streams.get("720p")
+            or fast_streams.get("480p")
+            or fast_streams.get("360p")
+            or file_info.get("stream_url")
+            or file_info.get("download_link")
+        )
+
+        download_url = file_info.get("download_link")
+        file_name = file_info.get("name", "File Ready")
+
+        if not watch_url:
+            bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=status_msg.message_id,
+                text="❌ No playable stream found."
+            )
+            return
+
+        encoded_watch = quote_plus(watch_url)
+        final_player_url = f"{PLAYER_BASE}?url={encoded_watch}"
+
         markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("▶️ Watch Online", url=final_player_url))
 
-        # Multi-quality HLS buttons
-        for quality in ["720p", "480p", "360p"]:
-            stream = fast_streams.get(quality)
-            if stream:
-                encoded = quote_plus(stream)
-                player_url = f"{PLAYER_BASE}?url={encoded}"
-                markup.add(
-                    types.InlineKeyboardButton(
-                        f"▶️ Watch {quality}",
-                        url=player_url
-                    )
-                )
-
-        # Fallback if no HLS
-        if not fast_streams:
-            fallback = file_info.get("stream_url") or download_url
-            if fallback:
-                encoded = quote_plus(fallback)
-                player_url = f"{PLAYER_BASE}?url={encoded}"
-                markup.add(
-                    types.InlineKeyboardButton(
-                        "▶️ Watch Online",
-                        url=player_url
-                    )
-                )
-
-        # Download button
         if download_url:
             markup.add(types.InlineKeyboardButton("⬇️ Download", url=download_url))
+
+        total_users = get_user_count()
 
         bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=status_msg.message_id,
-            text=f"✅ Ready!\n\n📦 {file_name}",
+            text=(
+                f"✅ Ready!\n\n"
+                f"📦 {file_name}\n"
+                f"👥 Users: {total_users}\n\n"
+                f"📢 Join: {CHANNEL_USERNAME}"
+            ),
             reply_markup=markup
         )
 
