@@ -59,11 +59,13 @@ def handle_terabox_link(message):
                 parse_mode="Markdown"
             )
         else:
-            bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=status_msg.message_id,
-                text=f"❌ **API Error ({response.status_code}):** {response.text}"
-            )
+            download_link = data.get("download_url") or data.get("link") or "No link found"
+
+bot.edit_message_text(
+    chat_id=message.chat.id,
+    message_id=status_msg.message_id,
+    text=f"✅ Download ready:\n{download_link}"
+)
 
     except Exception as e:
         logger.error(f"Request Error: {e}")
