@@ -10,6 +10,10 @@ from urllib.parse import quote_plus
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAPIVERSE_KEY = os.getenv("XAPIVERSE_KEY")
 
+# Force subscribe settings
+CHANNEL_USERNAME = "@terabox_directlinks"   # apna channel username
+CHANNEL_LINK = "https://t.me/terabox_directlinks"
+
 PLAYER_BASE = "https://teraplayer979.github.io/stream-player/"
 
 # --------------- LOGGING ----------------
@@ -22,14 +26,46 @@ if not BOT_TOKEN or not XAPIVERSE_KEY:
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# --------------- FORCE SUBSCRIBE CHECK ---------------
+def is_user_joined(user_id):
+    try:
+        member = bot.get_chat_member(CHANNEL_USERNAME, user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except:
+        return False
+
+def join_markup():
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK))
+    return markup
+
 # --------------- START ------------------
 @bot.message_handler(commands=["start", "help"])
 def start(message):
+    if not is_user_joined(message.from_user.id):
+        bot.reply_to(
+            message,
+            "🚫 You must join our channel to use this bot.",
+            reply_markup=join_markup()
+        )
+        return
+
     bot.reply_to(message, "Send a Terabox link to stream or download.")
 
 # --------------- MAIN HANDLER -----------
 @bot.message_handler(func=lambda message: True)
 def handle_link(message):
+    user_id = message.from_user.id
+
+    # Force subscribe check
+    if not is_user_joined(user_id):
+        bot.reply_to(
+            message,
+            "🚫 Join our channel first to use this bot.",
+            reply_markup=join_markup()
+        )
+        return
+
     url_text = message.text.strip()
 
     if "terabox" not in url_text and "1024tera" not in url_text:
@@ -56,9 +92,7 @@ def handle_link(message):
             return
 
         json_data = response.json()
-        logger.info(json_data)  # Debug log
 
-        # ----------- SAFE EXTRACTION -----------
         file_list = json_data.get("list", [])
         if not file_list:
             bot.edit_message_text(
@@ -69,37 +103,41 @@ def handle_link(message):
             return
 
         file_info = file_list[0]
-
-        # --- INTELLIGENT STREAM SELECTION ---
-        fast_streams = file_info.get("fast_stream_url", {})
-
-        watch_url = (
-            fast_streams.get("720p")
-            or fast_streams.get("480p")
-            or fast_streams.get("360p")
-            or file_info.get("stream_url")  # fallback
-            or file_info.get("download_link")  # last fallback
-        )
-
-        download_url = file_info.get("download_link")
         file_name = file_info.get("name", "File Ready")
+        download_url = file_info.get("download_link")
 
-        if not watch_url:
-            bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=status_msg.message_id,
-                text="❌ No playable stream found."
-            )
-            return
-
-        # Encode for player
-        encoded_watch = quote_plus(watch_url)
-        final_player_url = f"{PLAYER_BASE}?url={encoded_watch}"
+        fast_streams = file_info.get("fast_stream_url", {})
 
         # Create buttons
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("▶️ Watch Online", url=final_player_url))
 
+        # Multi-quality HLS buttons
+        for quality in ["720p", "480p", "360p"]:
+            stream = fast_streams.get(quality)
+            if stream:
+                encoded = quote_plus(stream)
+                player_url = f"{PLAYER_BASE}?url={encoded}"
+                markup.add(
+                    types.InlineKeyboardButton(
+                        f"▶️ Watch {quality}",
+                        url=player_url
+                    )
+                )
+
+        # Fallback if no HLS
+        if not fast_streams:
+            fallback = file_info.get("stream_url") or download_url
+            if fallback:
+                encoded = quote_plus(fallback)
+                player_url = f"{PLAYER_BASE}?url={encoded}"
+                markup.add(
+                    types.InlineKeyboardButton(
+                        "▶️ Watch Online",
+                        url=player_url
+                    )
+                )
+
+        # Download button
         if download_url:
             markup.add(types.InlineKeyboardButton("⬇️ Download", url=download_url))
 
