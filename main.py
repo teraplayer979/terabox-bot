@@ -63,15 +63,13 @@ def start(message):
     bot.reply_to(message, "Send any Terabox link.")
 
 
-@bot.message_handler(func=lambda m: True)
-def handle(message):
-    url = message.text.strip()
-
-    if "terabox" not in url:
-        bot.reply_to(message, "Send a valid Terabox link.")
+@bot.message_handler(func=lambda message: True)
+def handle_link(message):
+    url_text = message.text.strip()
+    if "terabox" not in url_text and "1024tera" not in url_text:
         return
 
-    status = bot.reply_to(message, "Processing...")
+    wait_msg = bot.reply_to(message, "⏳ Direct link found. Sending now...")
 
     try:
         api_url = "https://xapiverse.com/api/terabox"
@@ -79,30 +77,41 @@ def handle(message):
             "Content-Type": "application/json",
             "xAPIverse-Key": XAPIVERSE_KEY
         }
-        payload = {"url": url}
+        payload = {"url": url_text}
 
-        r = requests.post(api_url, headers=headers, json=payload, timeout=60)
+        response = requests.post(api_url, headers=headers, json=payload, timeout=60)
 
-        if r.status_code == 200:
-            data = r.json()
-            msg = extract_data(data)
+        if response.status_code == 200:
+            json_data = response.json()
+
+            download_url = json_data.get("list", [{}])[0].get("download_link")
+
+            if download_url:
+                bot.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=wait_msg.message_id,
+                    text=f"✅ Download Link:\n{download_url}",
+                    disable_web_page_preview=True
+                )
+            else:
+                bot.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=wait_msg.message_id,
+                    text="❌ Download link not found in API response."
+                )
         else:
-            msg = f"❌ API error: {r.status_code}"
-
-        bot.edit_message_text(
-            msg,
-            message.chat.id,
-            status.message_id,
-            parse_mode="Markdown",
-            disable_web_page_preview=True
-        )
+            bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=wait_msg.message_id,
+                text=f"❌ API Error: {response.status_code}"
+            )
 
     except Exception as e:
-        logger.error(e)
+        logger.error(f"Request Failure: {e}")
         bot.edit_message_text(
-            "⚠️ Internal error.",
-            message.chat.id,
-            status.message_id
+            chat_id=message.chat.id,
+            message_id=wait_msg.message_id,
+            text="⚠️ Service unavailable. Please try again later."
         )
 
 
