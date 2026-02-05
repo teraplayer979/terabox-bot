@@ -1,7 +1,7 @@
 import telebot
 import os
 
-TOKEN = os.environ.get("BOT_TOKEN")
+TOKEN = os.environ.get("8469056505:AAF5sUmwOFivt2fQ4oJHxARZMiIgW2orXVI")
 
 if not TOKEN:
     print("BOT_TOKEN missing")
