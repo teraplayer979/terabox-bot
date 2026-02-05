@@ -50,50 +50,48 @@ def handle_terabox(message):
 
         response = requests.post(api_url, headers=headers, json=payload, timeout=60)
 
-        if response.status_code == 200:
-            json_data = response.json()
+       # --- Extraction and Button Creation Logic ---
 
-            file_info = json_data.get("list", [{}])[0]
-            stream_link = file_info.get("stream_url") or file_info.get("download_link")
-            download_link = file_info.get("download_link")
-            file_name = file_info.get("name", "File")
+try:
+    file_info = json_data.get("list", [{}])[0]
+    
+    fast_streams = file_info.get("fast_stream_url", {})
+    watch_url = fast_streams.get("720p") or file_info.get("stream_url")
+    
+    download_url = file_info.get("download_link")
+    file_name = file_info.get("name") or "File Ready"
 
-            if stream_link:
-                # Encode for your player
-                player_url = f"https://teraplayer979.github.io/stream-player/?url={stream_link}"
+    if watch_url:
+        encoded_watch = quote_plus(watch_url)
+        final_player_url = f"https://teraplayer979.github.io/stream-player/?url={encoded_watch}"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("▶️ Watch Online", url=final_player_url))
+        
+        if download_url:
+            markup.add(types.InlineKeyboardButton("⬇️ Download", url=download_url))
 
-                markup = types.InlineKeyboardMarkup()
-                markup.add(types.InlineKeyboardButton("▶️ Watch Online", url=player_url))
-
-                if download_link:
-                    markup.add(types.InlineKeyboardButton("⬇️ Download", url=download_link))
-
-                bot.edit_message_text(
-                    chat_id=message.chat.id,
-                    message_id=status_msg.message_id,
-                    text=f"✅ Ready:\n{file_name}",
-                    reply_markup=markup
-                )
-            else:
-                bot.edit_message_text(
-                    message.chat.id,
-                    status_msg.message_id,
-                    "❌ No stream found."
-                )
-        else:
-            bot.edit_message_text(
-                message.chat.id,
-                status_msg.message_id,
-                f"❌ API Error: {response.status_code}"
-            )
-
-    except Exception as e:
-        logger.error(e)
         bot.edit_message_text(
-            message.chat.id,
-            status_msg.message_id,
-            "⚠️ Something went wrong."
+            chat_id=message.chat.id,
+            message_id=status_msg.message_id,
+            text=f"✅ **Links Generated!**\n\n📦 `{file_name}`",
+            parse_mode="Markdown",
+            reply_markup=markup
         )
+    else:
+        bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=status_msg.message_id,
+            text="❌ Streaming Error: No playable stream found."
+        )
+
+except (IndexError, KeyError, TypeError) as e:
+    logger.error(f"Extraction failed: {e}")
+    bot.edit_message_text(
+        chat_id=message.chat.id, 
+        message_id=status_msg.message_id, 
+        text="❌ Error: Failed to parse stream data."
+    )
 
 # --- RUNNER ---
 def run_bot():
