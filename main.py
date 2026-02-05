@@ -37,6 +37,8 @@ def start(message):
     bot.reply_to(message, "Send any Terabox link.")
 
 # --- MAIN LINK HANDLER ---
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+
 @bot.message_handler(func=lambda message: True)
 def handle_link(message):
     # Force subscribe check
@@ -51,7 +53,7 @@ def handle_link(message):
     if "terabox" not in url_text and "1024tera" not in url_text:
         return
 
-    wait_msg = bot.reply_to(message, "⏳ Generating download link...")
+    wait_msg = bot.reply_to(message, "⏳ Generating links...")
 
     try:
         api_url = "https://xapiverse.com/api/terabox"
@@ -65,14 +67,40 @@ def handle_link(message):
 
         if response.status_code == 200:
             json_data = response.json()
-            download_url = json_data.get("list", [{}])[0].get("download_link")
+            file_data = json_data.get("list", [{}])[0]
+
+            download_url = file_data.get("download_link")
+            stream_url = (
+                file_data.get("stream_link")
+                or file_data.get("play_link")
+                or file_data.get("url")
+            )
 
             if download_url:
+                markup = InlineKeyboardMarkup()
+
+                # Streaming button
+                if stream_url:
+                    markup.add(
+                        InlineKeyboardButton(
+                            "▶️ Watch Online",
+                            url=stream_url
+                        )
+                    )
+
+                # Download button
+                markup.add(
+                    InlineKeyboardButton(
+                        "⬇️ Download",
+                        url=download_url
+                    )
+                )
+
                 bot.edit_message_text(
                     chat_id=message.chat.id,
                     message_id=wait_msg.message_id,
-                    text=f"✅ Download Link:\n{download_url}",
-                    disable_web_page_preview=True
+                    text="✅ Your links are ready:",
+                    reply_markup=markup
                 )
             else:
                 bot.edit_message_text(
@@ -94,7 +122,6 @@ def handle_link(message):
             message_id=wait_msg.message_id,
             text="⚠️ Error processing link."
         )
-
 # --- SAFE STARTUP ---
 def run():
     time.sleep(5)
