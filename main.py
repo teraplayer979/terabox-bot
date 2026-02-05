@@ -11,153 +11,138 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Load Environment Variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAPIVERSE_KEY = os.getenv("XAPIVERSE_KEY")
 
 if not BOT_TOKEN or not XAPIVERSE_KEY:
-    logger.error("CRITICAL: BOT_TOKEN or XAPIVERSE_KEY missing!")
+    logger.error("CRITICAL: BOT_TOKEN or XAPIVERSE_KEY is missing!")
     exit(1)
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- 2. ADVANCED DATA EXTRACTION ---
+# --- 2. DATA EXTRACTION LOGIC ---
 
-def recursive_search(data, target_key):
-    """
-    Deeply searches for a specific key in any nested dictionary or list.
-    """
-    if isinstance(data, dict):
-        if target_key in data:
-            return data[target_key]
-        for key, value in data.items():
-            result = recursive_search(value, target_key)
-            if result:
-                return result
-    elif isinstance(data, list):
-        for item in data:
-            result = recursive_search(item, target_key)
-            if result:
-                return result
-    return None
+def format_size(size_bytes):
+    """Converts bytes to a readable MB/GB format."""
+    try:
+        size_bytes = int(size_bytes)
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size_bytes < 1024:
+                return f"{size_bytes:.2f} {unit}"
+            size_bytes /= 1024
+    except:
+        return "Unknown Size"
 
-def extract_download_info(json_data):
+def extract_best_link(data):
     """
-    Extracts name, size, and link by checking multiple known structures
-    and falling back to a deep recursive search.
+    Parses xAPIverse response specifically looking for stable download URLs.
     """
     try:
-        # Log the full response for debugging in Railway logs
-        logger.info(f"FULL API RESPONSE: {json_data}")
+        # Log the full response for debugging in Railway
+        logger.info(f"API RESPONSE: {data}")
 
-        # 1. Try to find the data container
-        content = json_data.get("data") or json_data.get("result") or json_data
+        # xAPIverse usually returns data inside a 'data' object
+        info = data.get("data", {}) if isinstance(data.get("data"), dict) else data
         
-        # 2. Extract File Name
-        file_name = (
-            content.get("file_name") or 
-            content.get("filename") or 
-            recursive_search(json_data, "file_name") or 
-            "Unknown_File"
-        )
+        # 1. Get File Metadata
+        file_name = info.get("file_name") or info.get("filename") or "File_Generated"
+        raw_size = info.get("size") or info.get("filesize") or 0
+        readable_size = format_size(raw_size)
 
-        # 3. Extract Size
-        file_size = (
-            content.get("size") or 
-            content.get("filesize") or 
-            recursive_search(json_data, "size") or 
-            "Unknown"
-        )
-
-        # 4. Extract Direct Link (Priority list)
-        # We check specific common keys first, then search everywhere
+        # 2. Get the Link (Priority: download_link > direct_link > dlink > url)
+        # xAPIverse often provides a 'download_link' which is more stable than the worker URL
         dl_link = (
-            content.get("direct_link") or 
-            content.get("download_link") or 
-            content.get("url") or 
-            content.get("dlink") or
-            recursive_search(json_data, "direct_link") or
-            recursive_search(json_data, "download_link") or
-            recursive_search(json_data, "url")
+            info.get("download_link") or 
+            info.get("direct_link") or 
+            info.get("dlink") or 
+            info.get("url")
         )
 
         if not dl_link:
-            return "❌ Download link not found in the API response structure."
+            return "❌ No valid download link was found in the API response."
 
-        # Safety: Ensure name isn't too long for Telegram
-        if len(str(file_name)) > 150:
-            file_name = str(file_name)[:147] + "..."
+        # 3. Message Formatting & Length Protection
+        if len(file_name) > 100:
+            file_name = file_name[:97] + "..."
 
-        message = (
+        msg = (
+            f"✅ **Link Generated!**\n\n"
             f"📦 **File:** `{file_name}`\n"
-            f"⚖️ **Size:** {file_size}\n\n"
-            f"🚀 **Direct Link:**\n`{dl_link}`"
+            f"⚖️ **Size:** {readable_size}\n\n"
+            f"🚀 **Download Link:**\n`{dl_link}`\n\n"
+            f"⚠️ *Note: If the link shows 'Forbidden', try opening it in an Incognito window or a different browser.*"
         )
         
-        # Telegram Message Length Protection (4096 limit)
-        return message[:4000]
+        return msg[:4000] # Telegram limit safety
 
     except Exception as e:
         logger.error(f"Extraction Error: {e}")
-        return "⚠️ Failed to parse response. Check logs for the JSON structure."
+        return "⚠️ Failed to parse API response. Please check Railway logs."
 
 # --- 3. BOT HANDLERS ---
 
 @bot.message_handler(commands=['start', 'help'])
-def welcome(message):
-    bot.reply_to(message, "✅ **Terabox Link Downloader Ready**\nSend a link to get the direct download data.")
+def send_welcome(message):
+    bot.reply_to(message, "👋 **Terabox Downloader**\n\nSend me any Terabox link and I will generate a direct download link for you.")
 
 @bot.message_handler(func=lambda message: True)
 def handle_link(message):
-    url_text = message.text.strip()
+    url = message.text.strip()
     
-    if "terabox" not in url_text and "1024tera" not in url_text:
+    if "terabox" not in url and "1024tera" not in url:
         return
 
-    wait_msg = bot.reply_to(message, "⏳ *Processing link...*", parse_mode="Markdown")
+    status = bot.reply_to(message, "⏳ *Requesting direct access from xAPIverse...*", parse_mode="Markdown")
 
     try:
+        # xAPIverse API endpoint
         api_url = "https://xapiverse.com/api/terabox"
+        
         headers = {
             "Content-Type": "application/json",
             "xAPIverse-Key": XAPIVERSE_KEY
         }
-        payload = {"url": url_text}
+        
+        payload = {"url": url}
 
+        # Higher timeout for Terabox link generation
         response = requests.post(api_url, headers=headers, json=payload, timeout=60)
         
         if response.status_code == 200:
-            data = response.json()
-            # Pass data to the deep extraction function
-            final_text = extract_download_info(data)
+            json_data = response.json()
             
-            bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=wait_msg.message_id,
-                text=final_text,
-                parse_mode="Markdown",
-                disable_web_page_preview=True
-            )
+            # Check for API-side errors
+            if json_data.get("status") == "error":
+                result_text = f"❌ **API Error:** {json_data.get('message', 'Link generation failed')}"
+            else:
+                result_text = extract_best_link(json_data)
+        
+        elif response.status_code == 401:
+            result_text = "❌ **Invalid API Key.** Please check your XAPIVERSE_KEY environment variable."
         else:
-            bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=wait_msg.message_id,
-                text=f"❌ **API Server Error:** Status code {response.status_code}"
-            )
+            result_text = f"❌ **Server Error:** API returned status `{response.status_code}`"
 
-    except Exception as e:
-        logger.error(f"Handler Error: {e}")
         bot.edit_message_text(
             chat_id=message.chat.id,
-            message_id=wait_msg.message_id,
-            text="⚠️ An unexpected error occurred. Connection timed out or structure changed."
+            message_id=status.message_id,
+            text=result_text,
+            parse_mode="Markdown",
+            disable_web_page_preview=True
         )
 
-# --- 4. PRODUCTION RUNNER ---
+    except requests.exceptions.Timeout:
+        bot.edit_message_text(chat_id=message.chat.id, message_id=status.message_id, text="⏰ **Timeout:** The API took too long to respond.")
+    except Exception as e:
+        logger.error(f"General Error: {e}")
+        bot.edit_message_text(chat_id=message.chat.id, message_id=status.message_id, text="⚠️ An unexpected error occurred.")
 
-def run_production():
-    logger.info("Bot starting up...")
+# --- 4. PRODUCTION POLLING LOOP ---
+
+def start_bot():
+    logger.info("Bot is starting...")
     
-    # Pre-start: Clean up previous sessions to avoid 409 Conflict
+    # Force clean start for Railway
     try:
         bot.remove_webhook()
         time.sleep(2)
@@ -166,11 +151,11 @@ def run_production():
 
     while True:
         try:
-            logger.info("Bot is polling...")
+            logger.info("Polling for messages...")
             bot.infinity_polling(timeout=20, long_polling_timeout=10)
         except Exception as e:
-            logger.error(f"Polling Restarting due to: {e}")
-            time.sleep(5)
+            logger.error(f"Polling error: {e}")
+            time.sleep(10)
 
 if __name__ == "__main__":
-    run_production()
+    start_bot()
