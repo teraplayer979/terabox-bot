@@ -124,39 +124,48 @@ def private_chat(message):
 
 # --- 3. ROBUST STARTUP & POLLING LOGIC ---
 
+# --- 3. FINAL PRODUCTION RUNNER (MANUAL LOOP) ---
+
 def run_production_bot():
-    logger.info("Bot starting up...")
+    print("--- STARTING BOT PROTECTION SEQUENCE ---")
+    logger.info("Bot starting...")
 
     # 1. Force Clear Webhook
-    # This tells Telegram: "Stop sending updates to any URL, I am taking over."
+    # This prevents "Conflict: terminated by other getUpdates request"
+    # caused by a stuck webhook from a previous run.
     try:
         bot.remove_webhook()
-        time.sleep(2) # Give Telegram API time to propagate the removal
+        time.sleep(2) 
     except Exception as e:
-        logger.warning(f"Webhook removal warning: {e}")
+        logger.warning(f"Webhook removal check: {e}")
 
-    # 2. Conflict-Proof Loop
+    # 2. Manual Pulse Loop
+    # We use manual bot.polling() instead of infinity_polling() 
+    # so we can explicitly catch the 409 error and sleep.
     while True:
         try:
-            logger.info("Starting Long Polling...")
+            logger.info("Connecting to Telegram...")
             
-            # infinity_polling is robust against network flickers
-            # timeout=60 keeps the connection open longer, reducing request frequency
-            # long_polling_timeout=30 ensures we don't spam the API
-            bot.infinity_polling(timeout=60, long_polling_timeout=30)
+            # non_stop=True keeps it running. 
+            # timeout=60 keeps the connection open longer (less frequent requests).
+            bot.polling(non_stop=True, interval=0, timeout=60)
             
         except apihelper.ApiTelegramException as e:
+            # THIS CATCHES THE 409 ERROR SPECIFICALLY
             if e.error_code == 409:
-                logger.error("CRITICAL: 409 Conflict detected (Duplicate Instance).")
-                logger.error("Waiting 15 seconds for the old instance to die...")
-                time.sleep(15) # Wait out the overlap
+                logger.error("!!! CONFLICT DETECTED (409) !!!")
+                logger.error("Another bot instance is running with this token.")
+                logger.error("Sleeping for 15 seconds to let the old instance die...")
+                time.sleep(15)  # The important pause
             else:
                 logger.error(f"Telegram API Error: {e}")
                 time.sleep(5)
                 
         except Exception as e:
-            logger.error(f"Crash detected: {e}")
+            # Catches network errors, timeouts, etc.
+            logger.error(f"Network/General Error: {e}")
             time.sleep(5)
 
 if __name__ == "__main__":
+    # This ensures the script handles the restart loop internally
     run_production_bot()
