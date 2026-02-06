@@ -16,6 +16,10 @@ PLAYER_BASE = "https://teraplayer979.github.io/stream-player/"
 CHANNEL_USERNAME = "@terabox_directlinks"
 CHANNEL_LINK = "https://t.me/terabox_directlinks"
 
+# Auto-posting settings
+UPLOAD_GROUP = "@terabox_movies_hub0"
+TARGET_CHANNEL = "@terabox_directlinks"
+
 # --------------- LOGGING ----------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -42,17 +46,72 @@ def join_markup():
 # --------------- START ------------------
 @bot.message_handler(commands=["start", "help"])
 def start(message):
-    user_id = message.from_user.id
-
-    if not is_user_joined(user_id):
-        bot.reply_to(
-            message,
-            "🚫 Join our channel first to use this bot.",
-            reply_markup=join_markup()
-        )
-        return
-
     bot.reply_to(message, "Send a Terabox link to stream or download.")
+
+# --------------- AUTO POSTING HANDLER -----------
+@bot.message_handler(func=lambda message: message.chat.type in ['group', 'supergroup'])
+def handle_group_autopost(message):
+    try:
+        # Check correct group username
+        if not message.chat.username:
+            return
+
+        if f"@{message.chat.username}" != UPLOAD_GROUP:
+            return
+
+        url_text = message.text.strip()
+        if "terabox" not in url_text and "1024tera" not in url_text:
+            return
+
+        api_url = "https://xapiverse.com/api/terabox"
+        headers = {
+            "Content-Type": "application/json",
+            "xAPIverse-Key": XAPIVERSE_KEY
+        }
+        payload = {"url": url_text}
+
+        response = requests.post(api_url, headers=headers, json=payload, timeout=60)
+
+        if response.status_code == 200:
+            json_data = response.json()
+            file_list = json_data.get("list", [])
+            if not file_list:
+                return
+
+            file_info = file_list[0]
+            fast_streams = file_info.get("fast_stream_url", {})
+
+            watch_url = (
+                fast_streams.get("720p")
+                or fast_streams.get("480p")
+                or fast_streams.get("360p")
+                or file_info.get("stream_url")
+                or file_info.get("download_link")
+            )
+
+            download_url = file_info.get("download_link")
+            file_name = file_info.get("name", "File Ready")
+
+            if not watch_url:
+                return
+
+            encoded_watch = quote_plus(watch_url)
+            final_player_url = f"{PLAYER_BASE}?url={encoded_watch}"
+
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("▶️ Watch Online", url=final_player_url))
+
+            if download_url:
+                markup.add(types.InlineKeyboardButton("⬇️ Download", url=download_url))
+
+            bot.send_message(
+                chat_id=TARGET_CHANNEL,
+                text=f"🎬 {file_name}",
+                reply_markup=markup
+            )
+
+    except Exception as e:
+        logger.error(f"Auto-post Error: {e}")
 
 # --------------- MAIN HANDLER -----------
 @bot.message_handler(func=lambda message: True)
@@ -94,9 +153,8 @@ def handle_link(message):
             return
 
         json_data = response.json()
-        logger.info(json_data)  # Debug log
+        logger.info(json_data)
 
-        # ----------- SAFE EXTRACTION -----------
         file_list = json_data.get("list", [])
         if not file_list:
             bot.edit_message_text(
@@ -107,8 +165,6 @@ def handle_link(message):
             return
 
         file_info = file_list[0]
-
-        # --- INTELLIGENT STREAM SELECTION ---
         fast_streams = file_info.get("fast_stream_url", {})
 
         watch_url = (
@@ -130,11 +186,9 @@ def handle_link(message):
             )
             return
 
-        # Encode for player
         encoded_watch = quote_plus(watch_url)
         final_player_url = f"{PLAYER_BASE}?url={encoded_watch}"
 
-        # Create buttons
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("▶️ Watch Online", url=final_player_url))
 
