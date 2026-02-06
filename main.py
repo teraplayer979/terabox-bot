@@ -56,8 +56,9 @@ def handle_link(message):
             return
 
         json_data = response.json()
-        logger.info(json_data)
+        logger.info(json_data)  # Debug log
 
+        # ----------- SAFE EXTRACTION -----------
         file_list = json_data.get("list", [])
         if not file_list:
             bot.edit_message_text(
@@ -69,14 +70,15 @@ def handle_link(message):
 
         file_info = file_list[0]
 
+        # --- INTELLIGENT STREAM SELECTION ---
         fast_streams = file_info.get("fast_stream_url", {})
 
         watch_url = (
             fast_streams.get("720p")
             or fast_streams.get("480p")
             or fast_streams.get("360p")
-            or file_info.get("stream_url")
-            or file_info.get("download_link")
+            or file_info.get("stream_url")  # fallback
+            or file_info.get("download_link")  # last fallback
         )
 
         download_url = file_info.get("download_link")
@@ -90,9 +92,11 @@ def handle_link(message):
             )
             return
 
+        # Encode for player
         encoded_watch = quote_plus(watch_url)
         final_player_url = f"{PLAYER_BASE}?url={encoded_watch}"
 
+        # Create buttons
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("▶️ Watch Online", url=final_player_url))
 
@@ -131,4 +135,4 @@ def run_bot():
             time.sleep(10)
 
 if __name__ == "__main__":
-    run_bot()
+    run_bot() 
