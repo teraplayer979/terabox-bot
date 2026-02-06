@@ -10,10 +10,6 @@ from urllib.parse import quote_plus
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAPIVERSE_KEY = os.getenv("XAPIVERSE_KEY")
 
-# Force Subscribe Config
-CHANNEL_USERNAME = "@terabox_directlinks"
-CHANNEL_LINK = "https://t.me/terabox_directlinks"
-
 PLAYER_BASE = "https://teraplayer979.github.io/stream-player/"
 
 # --------------- LOGGING ----------------
@@ -38,35 +34,6 @@ def handle_link(message):
 
     if "terabox" not in url_text and "1024tera" not in url_text:
         return
-
-    # --- START FORCE SUBSCRIBE CHECK ---
-    user_id = message.from_user.id
-    try:
-        # Check membership status using the Channel Username
-        member_status = bot.get_chat_member(CHANNEL_USERNAME, user_id).status
-        
-        # Acceptable statuses: creator, administrator, member
-        if member_status not in ['creator', 'administrator', 'member']:
-            # Create Join Button Markup
-            fs_markup = types.InlineKeyboardMarkup()
-            btn_join = types.InlineKeyboardButton("📢 Join Channel to Use", url=CHANNEL_LINK)
-            fs_markup.add(btn_join)
-
-            bot.reply_to(
-                message, 
-                "⚠️ **Access Denied**\n\nYou must join our update channel to use this bot.",
-                parse_mode="Markdown",
-                reply_markup=fs_markup
-            )
-            return  # STOP processing here
-
-    except Exception as e:
-        # Logic to handle if bot is not admin in channel or API error
-        # We fail safely by logging and blocking to prevent bypass on error
-        logger.error(f"Force Subscribe Check Failed: {e}")
-        bot.reply_to(message, "⚠️ Error verifying subscription. Please report to admin.")
-        return
-    # --- END FORCE SUBSCRIBE CHECK ---
 
     status_msg = bot.reply_to(message, "⏳ Generating links...")
 
