@@ -28,21 +28,23 @@ if not BOT_TOKEN or not XAPIVERSE_KEY:
     logger.error("CRITICAL: Missing BOT_TOKEN or XAPIVERSE_KEY")
     exit(1)
 
-# --- FIX: Disable Threading in Constructor ---
-# We disable threading here. This works on all modern versions of pyTelegramBotAPI.
-# This prevents the 409 error from hiding inside a background thread.
+# --- FIX: Single-Threaded Mode ---
+# This prevents the 409 error loop and ensures stability on Railway.
 bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 
-# --- 2. CORE LOGIC (HANDLERS) ---
+# --- 2. CORE LOGIC ---
 
 def check_sub(user_id):
+    """Verifies if the user is a member of the required channel."""
     try:
         member = bot.get_chat_member(CHANNEL_USERNAME, user_id)
         return member.status in ['member', 'administrator', 'creator']
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Sub check failed for {user_id}: {e}")
         return False
 
 def get_link_data(url):
+    """Calls xAPIverse API to get video details."""
     try:
         api_url = "https://xapiverse.com/api/terabox"
         headers = {"Content-Type": "application/json", "xAPIverse-Key": XAPIVERSE_KEY}
@@ -71,19 +73,37 @@ def create_markup(watch, download):
         markup.add(types.InlineKeyboardButton("⬇️ Download", url=download))
     return markup
 
-# Handler 1: Auto-Post (Groups)
-@bot.message_handler(func=lambda m: m.chat.type in ['group', 'supergroup'])
-def auto_post(message):
-    if not message.text: return
+# --- 3. HANDLERS (STRICTLY SEPARATED) ---
+
+# Handler 1: /start command (Always replies)
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    logger.info(f"Command /start received from {message.from_user.id}")
+    bot.reply_to(message, "👋 **Bot is Online!**\n\nSend me a Terabox link to generate buttons.")
+
+# Handler 2: Auto-Post (Groups only)
+# We use chat_types=['group', 'supergroup'] to ensure we catch everything.
+@bot.message_handler(chat_types=['group', 'supergroup'])
+def handle_group_message(message):
+    if not message.text:
+        return
+
+    # Check if this is the correct source group
+    if not message.chat.username:
+        return
+        
+    current_group = f"@{message.chat.username}"
+    if current_group.lower() != SOURCE_GROUP.lower():
+        # Ignore messages from other random groups
+        return
+
+    # Check for Terabox link
+    if "terabox" not in message.text.lower() and "1024tera" not in message.text.lower():
+        return
+
+    logger.info(f"🔗 Link detected in source group: {SOURCE_GROUP}")
     
-    # Strict Username Check (Case-insensitive)
-    if not message.chat.username or message.chat.username.lower() != SOURCE_GROUP.replace('@', '').lower():
-        return
-
-    if "terabox" not in message.text and "1024tera" not in message.text:
-        return
-
-    logger.info(f"Auto-post detected from {SOURCE_GROUP}")
+    # Process the link
     name, watch, download = get_link_data(message.text.strip())
     
     if watch:
@@ -94,23 +114,39 @@ def auto_post(message):
                 f"🎬 {name}\n\n▶️ Watch Online\n⬇️ Download",
                 reply_markup=markup
             )
-            logger.info("Auto-posted successfully.")
+            logger.info("✅ Auto-posted successfully to target channel.")
         except Exception as e:
-            logger.error(f"Auto-post failed: {e}")
+            logger.error(f"❌ Auto-post failed: {e}")
 
-# Handler 2: Private Chat
-@bot.message_handler(func=lambda m: m.chat.type == 'private')
-def private_chat(message):
-    if not message.text or ("terabox" not in message.text and "1024tera" not in message.text):
+# Handler 3: Private Chat (Terabox Links)
+@bot.message_handler(chat_types=['private'])
+def handle_private_message(message):
+    if not message.text:
         return
 
+    # Only process Terabox links
+    if "terabox" not in message.text.lower() and "1024tera" not in message.text.lower():
+        return
+
+    logger.info(f"📩 Private link received from {message.from_user.id}")
+
+    # Force Subscribe Check
     if not check_sub(message.from_user.id):
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK))
-        bot.reply_to(message, "🚫 **Access Denied**\n\nPlease join our channel first.", reply_markup=markup, parse_mode="Markdown")
+        bot.reply_to(
+            message, 
+            "🚫 **Access Denied**\n\nPlease join our channel first to use this bot.", 
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+        logger.info(f"User {message.from_user.id} denied (not subscribed).")
         return
 
+    # Send "Processing" status
     status = bot.reply_to(message, "⏳ Processing...")
+    
+    # Fetch Data
     name, watch, download = get_link_data(message.text.strip())
 
     if watch:
@@ -122,44 +158,36 @@ def private_chat(message):
             reply_markup=markup,
             parse_mode="Markdown"
         )
+        logger.info("✅ Private link processed successfully.")
     else:
         bot.edit_message_text("❌ No playable links found.", message.chat.id, status.message_id)
 
-# --- 3. PRODUCTION RUNNER ---
+# --- 4. PRODUCTION RUNNER ---
 
-def run_production_bot():
-    print("--- STARTING BOT PROTECTION SEQUENCE ---")
+def run_bot():
+    print("--- STARTING BOT SEQUENCE ---")
     logger.info("Bot starting...")
 
-    # 1. Force Clear Webhook (Safe Version)
-    # We removed 'drop_pending_updates' because your library version didn't like it.
+    # 1. Force Clear Webhook
     try:
         bot.remove_webhook()
-        time.sleep(2) 
+        time.sleep(1)
     except Exception as e:
-        logger.warning(f"Webhook removal check: {e}")
+        logger.warning(f"Webhook check: {e}")
 
-    # 2. Manual Pulse Loop
+    # 2. Infinity Polling (Stable Mode)
+    # allowed_updates ensures we receive text messages correctly
     while True:
         try:
             logger.info("Connecting to Telegram...")
-            
-            # threaded=False is ALREADY set in the constructor above.
-            # We don't need to pass it here.
-            bot.polling(non_stop=True, interval=0, timeout=60)
-            
-        except apihelper.ApiTelegramException as e:
-            if e.error_code == 409:
-                logger.warning("!!! CONFLICT DETECTED (409) !!!")
-                logger.warning("Yielding execution for 20 seconds...")
-                time.sleep(20)  # Sleep to let the other instance die
-            else:
-                logger.error(f"Telegram API Error: {e}")
-                time.sleep(5)
-                
+            bot.infinity_polling(
+                timeout=60, 
+                long_polling_timeout=60, 
+                allowed_updates=['message', 'edited_message']
+            )
         except Exception as e:
-            logger.error(f"Network/General Error: {e}")
+            logger.error(f"Polling crashed: {e}")
             time.sleep(5)
 
 if __name__ == "__main__":
-    run_production_bot()
+    run_bot()
