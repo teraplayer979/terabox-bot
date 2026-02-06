@@ -7,6 +7,7 @@ from telebot import types, apihelper
 from urllib.parse import quote_plus
 
 # ---------------- CONFIG ----------------
+# REFRESH YOUR TOKEN IN RAILWAY VARIABLES BEFORE RUNNING THIS
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAPIVERSE_KEY = os.getenv("XAPIVERSE_KEY")
 
@@ -32,6 +33,9 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 # --------------- SHARED API LOGIC ------------------
 def fetch_terabox_data(url_text):
+    """
+    Core logic to fetch data from API.
+    """
     try:
         api_url = "https://xapiverse.com/api/terabox"
         headers = {
@@ -87,11 +91,13 @@ def fetch_terabox_data(url_text):
         return None
 
 
-# --------------- START ------------------
+# --------------- START COMMAND ------------------
 @bot.message_handler(commands=["start", "help"])
 def start(message):
     try:
-        bot.reply_to(message, "Send a Terabox link to stream or download.")
+        # Simple health check response
+        bot.reply_to(message, "✅ Bot is Online!\nSend a Terabox link to stream or download.")
+        logger.info(f"Start command received from user {message.from_user.id}")
     except Exception as e:
         logger.error(f"Error in /start: {e}")
 
@@ -102,39 +108,41 @@ def handle_group_message(message):
     try:
         if not message.text: return
 
-        # Safer username check
+        # 1. Check if we are in the correct group
+        # We handle cases where username might be None or have casing differences
         if message.chat.username:
             current_chat = message.chat.username.replace("@", "").lower()
             target_chat = SOURCE_GROUP_USERNAME.replace("@", "").lower()
             
             if current_chat != target_chat:
-                return # Wrong group
+                return # Ignore other groups silently
         else:
-            return # No username, ignore
+            return # Ignore groups without usernames
 
-        # Keyword Check
+        # 2. Check for Terabox link
         url_text = message.text.strip()
         if "terabox" not in url_text and "1024tera" not in url_text:
             return
 
-        logger.info(f"⚡ Processing Group Link: {url_text}")
+        logger.info(f"⚡ Link Detected in Source Group: {url_text}")
 
-        # API Process
+        # 3. Process API
         result = fetch_terabox_data(url_text)
 
         if result:
             text, markup = result
             try:
+                # 4. Post to Target Channel
                 bot.send_message(
                     chat_id=TARGET_CHANNEL_USERNAME,
                     text=text,
                     reply_markup=markup
                 )
-                logger.info(f"✅ Posted to Channel: {TARGET_CHANNEL_USERNAME}")
+                logger.info(f"✅ Auto-Posted to {TARGET_CHANNEL_USERNAME}")
             except Exception as e:
-                logger.error(f"❌ Channel Post Failed: {e}")
+                logger.error(f"❌ Failed to post to channel. Is bot Admin? Error: {e}")
         else:
-            logger.warning("⚠️ API returned no result for group link.")
+            logger.warning("⚠️ API returned no result. Link might be invalid.")
 
     except Exception as e:
         logger.error(f"Group Handler Error: {e}")
@@ -148,7 +156,7 @@ def handle_private_link(message):
     if "terabox" not in url_text and "1024tera" not in url_text:
         return
 
-    # Force Subscribe Check
+    # --- FORCE SUBSCRIBE CHECK ---
     user_id = message.from_user.id
     try:
         member_status = bot.get_chat_member(FS_CHANNEL_USERNAME, user_id).status
@@ -165,8 +173,10 @@ def handle_private_link(message):
             return
     except Exception as e:
         logger.error(f"FS Check Error: {e}")
-        # Fail safe: allow user if check fails (optional, or return to block)
-        # return 
+        # If check fails (e.g. bot not admin), we default to allowing the user
+        # to prevent locking everyone out due to a config error.
+        
+    # --- END CHECK ---
 
     status_msg = bot.reply_to(message, "⏳ Generating links...")
 
@@ -188,30 +198,29 @@ def handle_private_link(message):
         )
 
 
-# --------------- STABLE RUNNER ------------
+# --------------- ROBUST RUNNER ------------
 def run_bot():
-    print("--- BOT STARTING ---")
+    print("--- STARTING BOT PRODUCTION BUILD ---")
     
-    # 1. Clean Slate: Remove Webhook & Clear Pending Updates
+    # 1. Kill any existing webhook interactions
     try:
-        logger.info("Cleaning session...")
+        logger.info("Clearing previous updates...")
         bot.delete_webhook(drop_pending_updates=True)
-        time.sleep(2)
+        time.sleep(1)
     except Exception as e:
-        logger.warning(f"Session clean warning: {e}")
+        logger.warning(f"Webhook clear warning: {e}")
 
-    # 2. Infinite Loop with Conflict Handling
+    # 2. Main Loop
     while True:
         try:
             logger.info("Polling started...")
-            bot.infinity_polling(timeout=60, long_polling_timeout=20)
+            bot.infinity_polling(timeout=20, long_polling_timeout=10)
         
         except apihelper.ApiTelegramException as e:
             if e.error_code == 409:
-                logger.critical("❌ 409 CONFLICT DETECTED!")
-                logger.critical("Another bot instance is running. TERMINATE OTHER SESSIONS.")
-                logger.critical("Waiting 30 seconds before retry...")
-                time.sleep(30) # Wait longer to let other instance die
+                logger.critical("❌ ERROR 409: CONFLICT DETECTED")
+                logger.critical("Another bot instance is active. REVOKE YOUR TOKEN IN BOTFATHER.")
+                time.sleep(20) # Wait longer to avoid log spam
             else:
                 logger.error(f"Telegram API Error: {e}")
                 time.sleep(5)
