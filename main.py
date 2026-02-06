@@ -28,7 +28,10 @@ if not BOT_TOKEN or not XAPIVERSE_KEY:
     logger.error("CRITICAL: Missing BOT_TOKEN or XAPIVERSE_KEY")
     exit(1)
 
-bot = telebot.TeleBot(BOT_TOKEN)
+# --- FIX: Disable Threading Here ---
+# We disable threading in the constructor so that errors (like 409)
+# bubble up to our main loop instead of crashing a background thread.
+bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 
 # --- 2. CORE LOGIC (HANDLERS) ---
 
@@ -122,10 +125,10 @@ def private_chat(message):
     else:
         bot.edit_message_text("❌ No playable links found.", message.chat.id, status.message_id)
 
-# --- 3. PRODUCTION RUNNER (SINGLE THREADED) ---
+# --- 3. PRODUCTION RUNNER (CONFLICT PROOF) ---
 
 def run_production_bot():
-    print("--- STARTING SINGLE-THREADED PROTECTION SEQUENCE ---")
+    print("--- STARTING BOT PROTECTION SEQUENCE ---")
     logger.info("Bot starting...")
 
     # 1. Force Clear Webhook
@@ -135,19 +138,20 @@ def run_production_bot():
     except Exception as e:
         logger.warning(f"Webhook removal check: {e}")
 
-    # 2. Manual Pulse Loop (Threaded=False is CRITICAL)
+    # 2. Manual Pulse Loop
     while True:
         try:
             logger.info("Connecting to Telegram...")
             
-            # threaded=False ensures exceptions are raised in THIS loop, not a hidden thread.
-            bot.polling(non_stop=True, interval=0, timeout=50, threaded=False)
+            # non_stop=True: Keep polling even if errors occur (we catch them below)
+            # timeout=60: Long polling (efficient)
+            bot.polling(non_stop=True, interval=0, timeout=60)
             
         except apihelper.ApiTelegramException as e:
             if e.error_code == 409:
                 logger.warning("!!! CONFLICT DETECTED (409) !!!")
                 logger.warning("Yielding execution for 20 seconds...")
-                time.sleep(20)  # Sleep to let the old instance die
+                time.sleep(20)  # Sleep to let the other instance die
             else:
                 logger.error(f"Telegram API Error: {e}")
                 time.sleep(5)
