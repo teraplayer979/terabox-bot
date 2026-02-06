@@ -3,128 +3,156 @@ import time
 import logging
 import requests
 import telebot
-from telebot import types, apihelper
+from telebot import types
 from urllib.parse import quote_plus
 
-# --- CONFIGURATION & LOGGING ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-# Environment Variables
+# ---------------- CONFIG ----------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XAPIVERSE_KEY = os.getenv("XAPIVERSE_KEY")
 
-# Constants
-CHANNEL_USERNAME = "@terabox_directlinks"
+FORCE_CHANNEL = "@terabox_directlinks"
 SOURCE_GROUP = "@terabox_movies_hub0"
 TARGET_CHANNEL = "@terabox_directlinks"
 
+PLAYER_BASE = "https://teraplayer979.github.io/stream-player/"
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 if not BOT_TOKEN or not XAPIVERSE_KEY:
-    logger.error("Missing BOT_TOKEN or XAPIVERSE_KEY in environment variables!")
+    logger.error("Missing BOT_TOKEN or XAPIVERSE_KEY")
     exit(1)
 
-bot = telebot.TeleBot(BOT_TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-# --- HELPERS ---
+# ---------------- HELPERS ----------------
 
-def is_subscribed(user_id):
-    """Checks if the user is a member of the required channel."""
+def check_sub(user_id):
     try:
-        status = bot.get_chat_member(CHANNEL_USERNAME, user_id).status
-        return status in ['member', 'administrator', 'creator']
-    except Exception as e:
-        logger.error(f"Subscription check error: {e}")
+        member = bot.get_chat_member(FORCE_CHANNEL, user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except:
         return False
 
-def get_terabox_data(url):
-    """Calls xAPIverse API to fetch stream and download links."""
+def get_data(url):
     try:
-        api_url = "https://xapiverse.com/api/terabox"
-        headers = {"xapiverse-key": XAPIVERSE_KEY, "Content-Type": "application/json"}
-        payload = {"url": url}
-        response = requests.post(api_url, json=payload, headers=headers, timeout=30)
-        
-        if response.status_code == 200:
-            data = response.json()
-            # Extract links safely based on typical xapiverse response structure
-            # Note: Adjust keys if your specific API response differs
-            return {
-                "file_name": data.get("file_name", "Video File"),
-                "direct_link": data.get("direct_link"),
-                "stream_link": data.get("stream_link")
-            }
+        api = "https://xapiverse.com/api/terabox"
+        headers = {
+            "Content-Type": "application/json",
+            "xAPIverse-Key": XAPIVERSE_KEY
+        }
+        r = requests.post(api, headers=headers, json={"url": url}, timeout=40)
+        if r.status_code == 200:
+            data = r.json().get("list", [])
+            if data:
+                f = data[0]
+                fast = f.get("fast_stream_url", {})
+                stream = (
+                    fast.get("720p") or
+                    fast.get("480p") or
+                    fast.get("360p") or
+                    f.get("stream_url") or
+                    f.get("download_link")
+                )
+                return {
+                    "name": f.get("name", "Movie"),
+                    "stream": stream,
+                    "download": f.get("download_link")
+                }
     except Exception as e:
-        logger.error(f"API Error: {e}")
+        logger.error(e)
     return None
 
-def process_and_send(chat_id, url, reply_to_id=None):
-    """Reusable logic for both private and group messages."""
-    data = get_terabox_data(url)
+# ---------------- GROUP AUTO POST ----------------
+@bot.message_handler(func=lambda m: m.chat.type in ["group", "supergroup"])
+def group_handler(message):
+    if not message.text:
+        return
+
+    if message.chat.username != SOURCE_GROUP.replace("@", ""):
+        return
+
+    text = message.text.strip()
+    if "terabox" not in text and "1024tera" not in text:
+        return
+
+    data = get_data(text)
     if not data:
         return
 
+    encoded = quote_plus(data["stream"])
+    player = f"{PLAYER_BASE}?url={encoded}"
+
     markup = types.InlineKeyboardMarkup()
-    if data['stream_link']:
-        markup.add(types.InlineKeyboardButton("▶️ Watch Online", url=data['stream_link']))
-    if data['direct_link']:
-        markup.add(types.InlineKeyboardButton("⬇️ Download", url=data['direct_link']))
+    markup.add(types.InlineKeyboardButton("▶️ Watch Online", url=player))
 
-    caption = f"🎬 **{data['file_name']}**\n\n📥 **Source:** Terabox"
-    bot.send_message(chat_id, caption, reply_markup=markup, parse_mode="Markdown", reply_to_message_id=reply_to_id)
+    if data["download"]:
+        markup.add(types.InlineKeyboardButton("⬇️ Download", url=data["download"]))
 
-# --- HANDLERS ---
+    bot.send_message(
+        TARGET_CHANNEL,
+        f"🎬 {data['name']}\n\n▶️ Watch Online\n⬇️ Download",
+        reply_markup=markup
+    )
 
-@bot.message_handler(commands=['start'])
-def start(message):
-    bot.reply_to(message, "👋 Welcome! Send me a Terabox link to get started.")
-
-# Group Auto-Post Feature
-@bot.message_handler(func=lambda m: m.chat.username == SOURCE_GROUP.replace('@', '') or m.chat.title == SOURCE_GROUP)
-def handle_group(message):
-    if message.text and "terabox" in message.text.lower():
-        # Post directly to the Target Channel
-        process_and_send(TARGET_CHANNEL, message.text.strip())
-
-# Private Chat Handler
-@bot.message_handler(func=lambda m: m.chat.type == 'private')
-def handle_private(message):
-    if not message.text or "terabox" not in message.text.lower():
+# ---------------- PRIVATE HANDLER ----------------
+@bot.message_handler(func=lambda m: m.chat.type == "private")
+def private_handler(message):
+    if not message.text:
         return
 
-    if not is_subscribed(message.from_user.id):
+    user_id = message.from_user.id
+    text = message.text.strip()
+
+    if not check_sub(user_id):
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{CHANNEL_USERNAME.replace('@', '')}"))
-        bot.reply_to(message, "❌ **Access Denied!**\n\nYou must join our channel to use this bot.", reply_markup=markup, parse_mode="Markdown")
+        markup.add(types.InlineKeyboardButton("Join Channel", url="https://t.me/terabox_directlinks"))
+        bot.reply_to(message, "Join our channel first.", reply_markup=markup)
         return
 
-    bot.send_chat_action(message.chat.id, 'typing')
-    process_and_send(message.chat.id, message.text.strip(), reply_to_id=message.message_id)
+    if "terabox" not in text and "1024tera" not in text:
+        return
 
-# --- PRODUCTION POLLING LOOP ---
+    msg = bot.reply_to(message, "Generating link...")
 
+    data = get_data(text)
+    if not data:
+        bot.edit_message_text("Failed to fetch link.", message.chat.id, msg.message_id)
+        return
+
+    encoded = quote_plus(data["stream"])
+    player = f"{PLAYER_BASE}?url={encoded}"
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("▶️ Watch Online", url=player))
+
+    if data["download"]:
+        markup.add(types.InlineKeyboardButton("⬇️ Download", url=data["download"]))
+
+    bot.edit_message_text(
+        f"✅ <b>{data['name']}</b>",
+        message.chat.id,
+        msg.message_id,
+        reply_markup=markup
+    )
+
+# ---------------- SAFE RUNNER ----------------
 def run_bot():
-    """Main polling loop with conflict handling and auto-restart."""
-    logger.info("Bot is starting...")
-    
-    # Crucial: Remove webhook before starting polling to avoid 409 Conflict
+    logger.info("Starting bot...")
+
+    # HARD RESET TELEGRAM SESSION
     try:
-        bot.remove_webhook()
-        time.sleep(1) # Small delay for Telegram to process the removal
-    except Exception as e:
-        logger.warning(f"Failed to remove webhook: {e}")
+        bot.delete_webhook()
+    except:
+        pass
+
+    time.sleep(2)
 
     while True:
         try:
-            logger.info("Bot polling started.")
-            bot.polling(none_stop=True, interval=0, timeout=40)
-        except apihelper.ApiException as e:
-            if "Conflict" in str(e):
-                logger.error("409 Conflict detected. Another instance might be running. Retrying in 5s...")
-            else:
-                logger.error(f"Telegram API Error: {e}")
-            time.sleep(5)
+            bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=10)
         except Exception as e:
-            logger.error(f"General error: {e}")
+            logger.error(f"Crash: {e}")
             time.sleep(5)
 
 if __name__ == "__main__":
