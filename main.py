@@ -136,3 +136,61 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot() 
+# ---------------- WEBSITE API ----------------
+from flask import Flask, request, jsonify
+import threading
+
+app = Flask(__name__)
+
+@app.route("/api/terabox", methods=["POST"])
+def website_api():
+    try:
+        data = request.json
+        url_text = data.get("url")
+
+        api_url = "https://xapiverse.com/api/terabox"
+        headers = {
+            "Content-Type": "application/json",
+            "xAPIverse-Key": XAPIVERSE_KEY
+        }
+        payload = {"url": url_text}
+
+        response = requests.post(api_url, headers=headers, json=payload, timeout=60)
+
+        if response.status_code != 200:
+            return jsonify({"error": "API error"}), 500
+
+        json_data = response.json()
+        file_list = json_data.get("list", [])
+
+        if not file_list:
+            return jsonify({"error": "No file found"}), 404
+
+        file_info = file_list[0]
+        fast_streams = file_info.get("fast_stream_url", {})
+
+        video_url = (
+            fast_streams.get("720p")
+            or fast_streams.get("480p")
+            or fast_streams.get("360p")
+            or file_info.get("stream_url")
+            or file_info.get("download_link")
+        )
+
+        return jsonify({
+            "video": video_url,
+            "name": file_info.get("name")
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def run_api():
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
+
+# Run API in background thread
+api_thread = threading.Thread(target=run_api)
+api_thread.start()
