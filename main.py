@@ -134,8 +134,18 @@ def run_bot():
             logger.error(f"Polling crashed: {e}")
             time.sleep(10)
 
+# ---------------- RUN BOT + API TOGETHER ----------------
+def start_bot():
+    run_bot()
+
+def start_api():
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
 if __name__ == "__main__":
-    run_bot() 
+    import threading
+    threading.Thread(target=start_bot).start()
+    start_api() 
 # ---------------- WEBSITE API ----------------
 from flask import Flask, request, jsonify
 import threading
